@@ -9,11 +9,14 @@ from urllib.parse import parse_qs, urlparse
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit,
                            QGroupBox, QCheckBox, QTabWidget, QGridLayout, QMessageBox)
-from PyQt5.QtCore import QThread, pyqtSignal, QDateTime
+from PyQt5.QtCore import QThread, pyqtSignal, QDateTime, Qt
 from PyQt5.QtGui import QIcon
 import threading
 import ctypes
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class ApiClient:
     def __init__(self):
@@ -603,6 +606,8 @@ class MainWindow(QMainWindow):
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '头像.ico')
         self.setWindowIcon(QIcon(icon_path))
         self.initUI()
+        # 添加初始化检查
+        self.check_auto_exchange_status()
 
     def initUI(self):
         central_widget = QWidget()
@@ -791,6 +796,7 @@ class MainWindow(QMainWindow):
         
         # 开启自动兑换的开关
         self.auto_exchange_checkbox = QCheckBox("开启自动兑换（积分达到300时自动兑换）")
+        self.auto_exchange_checkbox.stateChanged.connect(self.on_auto_exchange_changed)
         auto_layout.addWidget(self.auto_exchange_checkbox)
         
         # 添加重试间隔设置
@@ -840,7 +846,13 @@ class MainWindow(QMainWindow):
 
     def handle_auto_exchange(self, scores):
         """处理自动兑换逻辑"""
-        if not self.auto_exchange_checkbox.isChecked() or getattr(self, 'exchange_in_progress', False):
+        if not hasattr(self, 'auto_exchange_checkbox') or not self.auto_exchange_checkbox.isChecked():
+            return
+        
+        if not hasattr(self, 'exchange_in_progress'):
+            self.exchange_in_progress = False
+        
+        if self.exchange_in_progress:
             return
             
         if scores >= 300:
@@ -1045,6 +1057,32 @@ class MainWindow(QMainWindow):
         worker.auto_exchange_signal.connect(self.handle_auto_exchange)
         worker.start()
         self.workers.append(worker)
+
+    def check_auto_exchange_status(self):
+        """检查并更新自动兑换状态"""
+        if hasattr(self, 'auto_exchange_checkbox') and hasattr(self, 'exchange_status'):
+            if self.auto_exchange_checkbox.isChecked():
+                self.exchange_status.setText("自动兑换状态：已开启")
+                self.exchange_status.setStyleSheet("color: green;")
+            else:
+                self.exchange_status.setText("自动兑换状态：未开启")
+                self.exchange_status.setStyleSheet("color: gray;")
+
+    def on_auto_exchange_changed(self, state):
+        """处理自动兑换状态变化"""
+        if state == Qt.Checked:
+            self.exchange_status.setText("自动兑换状态：已开启")
+            self.exchange_status.setStyleSheet("color: green;")
+            # 检查当前积分，如果已经达到300就立即触发兑换
+            try:
+                current_scores = int(self.scores_input.text())
+                if current_scores >= 300:
+                    self.handle_auto_exchange(current_scores)
+            except ValueError:
+                pass
+        else:
+            self.exchange_status.setText("自动兑换状态：未开启")
+            self.exchange_status.setStyleSheet("color: gray;")
 
     def __del__(self):
         self.is_running = False

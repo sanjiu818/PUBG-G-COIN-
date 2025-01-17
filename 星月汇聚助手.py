@@ -428,7 +428,7 @@ class ExchangeWorker(QThread):
                 result = self.api_client.exchange_item(self.uid, self.token, self.item_id)
                 self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {self.item_name} {result}")
                 
-                # 兑换成功后更新积分
+                # 兑换成功后更新积分并停止
                 if result == "兑换成功":
                     status = self.api_client.get_signin_status(self.uid, self.token)
                     if status:
@@ -440,14 +440,21 @@ class ExchangeWorker(QThread):
             except Exception as e:
                 error_msg = str(e)
                 if "429" in error_msg:
+                    # 遇到429错误继续重试
                     self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 兑换请求过于频繁，{self.retry_interval}毫秒后重试...")
                     time.sleep(self.retry_interval / 1000)
                     continue
-                else:
+                elif "积分不足" in error_msg:
+                    # 积分不足时停止
                     self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 兑换错误: {error_msg}")
                     self.error_signal.emit(error_msg)
                     self.is_running = False
                     return
+                else:
+                    # 其他错误也继续重试
+                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 兑换错误: {error_msg}，将继续重试...")
+                    time.sleep(self.retry_interval / 1000)
+                    continue
 
     def stop(self):
         self.is_running = False
@@ -495,15 +502,32 @@ class JacketWorker(QThread):
                 # 更新上次请求时间
                 last_time = time.time() * 1000
                 
+                # 领取成功后停止
+                if "领取成功" in result:
+                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}已成功领取，停止任务")
+                    self.is_running = False
+                    return
+                
                 # 等待指定延迟时间
                 time.sleep(self.delay / 1000)
+                
             except Exception as e:
                 error_msg = str(e)
-                if "已领取" in error_msg:
-                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}已领取，等待下次尝试")
+                if "429" in error_msg:
+                    # 请求过于频繁，继续重试
+                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}请求过于频繁，{self.delay}毫秒后重试...")
+                    time.sleep(self.delay / 1000)
+                    continue
+                elif "已领取" in error_msg:
+                    # 宝箱已被领取，停止任务
+                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}已被领取，停止任务")
+                    self.is_running = False
+                    return
                 else:
-                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}领取失败: {error_msg}")
-                time.sleep(self.delay / 1000)
+                    # 其他错误继续重试
+                    self.log_signal.emit(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 宝箱{self.box_id}领取失败: {error_msg}，将继续重试...")
+                    time.sleep(self.delay / 1000)
+                    continue
 
     def stop(self):
         self.is_running = False
@@ -915,8 +939,18 @@ class MainWindow(QMainWindow):
             self.uid_input.setText(uid)
             self.token_input.setText(token)
             self.nickname_input.setText(nickname)
-            self.scores_input.setText(scores)
+            self.scores_input.setText(scores)  # 改回显示真实积分
             self.log_text.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 成功获取用户信息: {nickname} (积分: {scores})")
+            
+            # 如果自动兑换已开启，检查真实积分
+            if hasattr(self, 'auto_exchange_checkbox') and self.auto_exchange_checkbox.isChecked():
+                try:
+                    current_scores = int(scores)
+                    if current_scores >= 300:
+                        self.handle_auto_exchange(current_scores)
+                except ValueError:
+                    pass
+            
         except Exception as e:
             self.log_text.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 获取用户信息失败: {str(e)}")
             QMessageBox.warning(self, "错误", str(e))
